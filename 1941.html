@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sky Ace 1941 - Pro Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: white;
+            font-family: 'Press+Start+2P', cursive;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            max-width: 600px; /* Had lebar untuk portrait feel di desktop */
+            background: #000;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+
+        .hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            font-size: 10px;
+            z-index: 10;
+            text-shadow: 2px 2px #000;
+        }
+
+        .health-bar {
+            width: 120px;
+            height: 12px;
+            border: 2px solid #fff;
+            background: rgba(0,0,0,0.5);
+            margin-top: 8px;
+        }
+
+        #health-fill {
+            height: 100%;
+            background: #ff0000;
+            width: 100%;
+            transition: width 0.2s;
+        }
+
+        .screen {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            z-index: 100;
+        }
+
+        .btn {
+            background: #fff;
+            color: #000;
+            padding: 20px 30px;
+            border: none;
+            cursor: pointer;
+            font-family: 'Press+Start+2P', cursive;
+            margin-top: 30px;
+            font-size: 14px;
+            box-shadow: 4px 4px 0px #888;
+        }
+
+        .btn:active {
+            transform: translate(2px, 2px);
+            box-shadow: 0px 0px 0px;
+        }
+
+        #level-banner {
+            position: absolute;
+            top: 40%;
+            width: 100%;
+            text-align: center;
+            font-size: 24px;
+            color: #f8b800;
+            pointer-events: none;
+            opacity: 0;
+            z-index: 50;
+            transition: opacity 0.5s;
+        }
+
+        .powerup-text {
+            color: #00ff00;
+            font-size: 8px;
+            margin-top: 5px;
+        }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div class="hud" id="hud">
+        <div>
+            <div>SCORE: <span id="score-val">0</span></div>
+            <div class="health-bar"><div id="health-fill"></div></div>
+            <div id="powerup-status" class="powerup-text hidden">DOUBLE SHOT ON!</div>
+        </div>
+        <div style="text-align: right;">
+            STAGE <span id="level-val">1</span><br>
+            <span style="font-size: 8px; color: #aaa; display: block; margin-top: 5px;">ESC: PAUSE</span>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="level-banner">STAGE CLEAR</div>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="screen">
+        <h1 style="color: #f8b800; font-size: 28px; margin-bottom: 10px;">SKY ACE</h1>
+        <h2 style="font-size: 40px; margin-bottom: 40px;">1941</h2>
+        <p style="font-size: 10px; line-height: 2.5;">
+            ARROWS - MOVE<br>
+            SPACE - SHOOT<br>
+            ESC - PAUSE
+        </p>
+        <button class="btn" onclick="startGame()">START MISSION</button>
+    </div>
+
+    <!-- Pause Screen -->
+    <div id="pause-screen" class="screen hidden">
+        <h2 style="font-size: 30px;">PAUSED</h2>
+        <button class="btn" onclick="togglePause()">RESUME</button>
+    </div>
+
+    <!-- Game Over -->
+    <div id="game-over" class="screen hidden">
+        <h2 style="color: #ff0000; font-size: 30px;">MISSION FAILED</h2>
+        <p style="margin-top: 30px; font-size: 12px;">SCORE: <span id="final-score">0</span></p>
+        <button class="btn" onclick="location.reload()">RETRY</button>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('game-container');
+    
+    // UI Elements
+    const scoreVal = document.getElementById('score-val');
+    const levelVal = document.getElementById('level-val');
+    const healthFill = document.getElementById('health-fill');
+    const banner = document.getElementById('level-banner');
+    const powerupStatus = document.getElementById('powerup-status');
+
+    // Virtual Resolution (Maintains pixel art look)
+    const V_WIDTH = 360;
+    const V_HEIGHT = 640;
+
+    let gameActive = false;
+    let isPaused = false;
+    let score = 0;
+    let level = 1;
+    let keys = {};
+
+    const player = {
+        x: V_WIDTH / 2 - 15,
+        y: V_HEIGHT - 80,
+        w: 30,
+        h: 30,
+        speed: 5,
+        hp: 100,
+        maxHp: 100,
+        lastShot: 0,
+        shotDelay: 180,
+        powerUpTime: 0
+    };
+
+    let bullets = [];
+    let enemies = [];
+    let powerUps = [];
+    let particles = [];
+    let stars = [];
+
+    // Setup Bintang
+    for (let i = 0; i < 60; i++) {
+        stars.push({
+            x: Math.random() * V_WIDTH,
+            y: Math.random() * V_HEIGHT,
+            size: Math.random() * 2,
+            speed: 1 + Math.random() * 4
+        });
+    }
+
+    function resize() {
+        const winW = window.innerWidth;
+        const winH = window.innerHeight;
+        const scale = Math.min(winW / V_WIDTH, winH / V_HEIGHT);
+        
+        canvas.width = V_WIDTH;
+        canvas.height = V_HEIGHT;
+        canvas.style.width = (V_WIDTH * scale) + "px";
+        canvas.style.height = (V_HEIGHT * scale) + "px";
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    window.addEventListener('keydown', e => {
+        keys[e.code] = true;
+        if (e.code === 'Escape') togglePause();
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    function startGame() {
+        document.getElementById('start-screen').classList.add('hidden');
+        gameActive = true;
+        gameLoop();
+    }
+
+    function togglePause() {
+        if (!gameActive && !isPaused) return;
+        isPaused = !isPaused;
+        document.getElementById('pause-screen').classList.toggle('hidden', !isPaused);
+        if (!isPaused) gameLoop();
+    }
+
+    function showBanner(text) {
+        banner.textContent = text;
+        banner.style.opacity = 1;
+        setTimeout(() => banner.style.opacity = 0, 2000);
+    }
+
+    function spawnEnemy() {
+        // Chance bertambah mengikut level
+        if (Math.random() < 0.02 + (level * 0.005)) {
+            const isHeavy = Math.random() > 0.9;
+            enemies.push({
+                x: Math.random() * (V_WIDTH - 40),
+                y: -50,
+                w: isHeavy ? 50 : 28,
+                h: isHeavy ? 40 : 28,
+                speed: (isHeavy ? 1.5 : 2.5) + (level * 0.3),
+                hp: isHeavy ? 50 : 10,
+                isHeavy: isHeavy,
+                color: isHeavy ? '#880000' : '#e40058'
+            });
+        }
+    }
+
+    function createExplosion(x, y, color, count = 8) {
+        for (let i = 0; i < count; i++) {
+            particles.push({
+                x, y,
+                vx: (Math.random() - 0.5) * 6,
+                vy: (Math.random() - 0.5) * 6,
+                life: 25,
+                color: color || '#ffaa00'
+            });
+        }
+    }
+
+    function update() {
+        if (!gameActive || isPaused) return;
+
+        // 1. Stars
+        stars.forEach(s => {
+            s.y += s.speed;
+            if (s.y > V_HEIGHT) s.y = -5;
+        });
+
+        // 2. Player Movement
+        if (keys['ArrowLeft'] && player.x > 0) player.x -= player.speed;
+        if (keys['ArrowRight'] && player.x < V_WIDTH - player.w) player.x += player.speed;
+        if (keys['ArrowUp'] && player.y > 0) player.y -= player.speed;
+        if (keys['ArrowDown'] && player.y < V_HEIGHT - player.h) player.y += player.speed;
+
+        // 3. Shooting
+        const now = Date.now();
+        if (keys['Space'] && now - player.lastShot > player.shotDelay) {
+            const hasPower = player.powerUpTime > now;
+            if (!hasPower) {
+                bullets.push({ x: player.x + player.w/2 - 2, y: player.y, w: 4, h: 12, speed: 10 });
+            } else {
+                bullets.push({ x: player.x + 5, y: player.y, w: 4, h: 12, speed: 10 });
+                bullets.push({ x: player.x + player.w - 9, y: player.y, w: 4, h: 12, speed: 10 });
+            }
+            player.lastShot = now;
+        }
+
+        // Power-up Status UI
+        powerupStatus.classList.toggle('hidden', player.powerUpTime <= now);
+
+        // 4. Bullets
+        bullets.forEach((b, i) => {
+            b.y -= b.speed;
+            if (b.y < -20) bullets.splice(i, 1);
+        });
+
+        // 5. Enemies
+        enemies.forEach((e, i) => {
+            e.y += e.speed;
+            if (e.y > V_HEIGHT) enemies.splice(i, 1);
+
+            // Bullet vs Enemy
+            bullets.forEach((b, bi) => {
+                if (rectIntersect(b.x, b.y, b.w, b.h, e.x, e.y, e.w, e.h)) {
+                    e.hp -= 10;
+                    bullets.splice(bi, 1);
+                    if (e.hp <= 0) {
+                        score += e.isHeavy ? 500 : 100;
+                        createExplosion(e.x + e.w/2, e.y + e.h/2, e.isHeavy ? '#ff0000' : '#f8b800');
+                        
+                        // Spawn Power-up (15% chance)
+                        if (Math.random() < 0.15) {
+                            powerUps.push({ x: e.x, y: e.y, w: 20, h: 20 });
+                        }
+                        
+                        enemies.splice(i, 1);
+                        checkLevelUp();
+                    }
+                }
+            });
+
+            // Player vs Enemy
+            if (rectIntersect(player.x, player.y, player.w, player.h, e.x, e.y, e.w, e.h)) {
+                player.hp -= 20;
+                createExplosion(player.x + player.w/2, player.y + player.h/2, '#fff', 15);
+                enemies.splice(i, 1);
+                if (player.hp <= 0) endGame();
+            }
+        });
+
+        // 6. Power-ups
+        powerUps.forEach((p, i) => {
+            p.y += 2;
+            if (rectIntersect(p.x, p.y, p.w, p.h, player.x, player.y, player.w, player.h)) {
+                player.powerUpTime = Date.now() + 8000; // 8 saat double shot
+                powerUps.splice(i, 1);
+            }
+            if (p.y > V_HEIGHT) powerUps.splice(i, 1);
+        });
+
+        // 7. Particles
+        particles.forEach((p, i) => {
+            p.x += p.vx; p.y += p.vy; p.life--;
+            if (p.life <= 0) particles.splice(i, 1);
+        });
+
+        spawnEnemy();
+        updateUI();
+    }
+
+    function checkLevelUp() {
+        const nextLevel = Math.floor(score / 1000) + 1;
+        if (nextLevel > level) {
+            level = nextLevel;
+            showBanner(`STAGE ${level}`);
+            player.hp = Math.min(100, player.hp + 20); // Bonus nyawa
+        }
+    }
+
+    function updateUI() {
+        scoreVal.textContent = score;
+        levelVal.textContent = level;
+        healthFill.style.width = player.hp + '%';
+    }
+
+    function rectIntersect(x1, y1, w1, h1, x2, y2, w2, h2) {
+        return x2 < x1 + w1 && x2 + w2 > x1 && y2 < y1 + h1 && y2 + h2 > y1;
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, V_WIDTH, V_HEIGHT);
+
+        // Stars
+        ctx.fillStyle = '#fff';
+        stars.forEach(s => ctx.fillRect(s.x, s.y, s.size, s.size));
+
+        // Power-ups
+        ctx.fillStyle = '#00ff00';
+        powerUps.forEach(p => {
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+            ctx.fillStyle = '#000';
+            ctx.font = '10px Arial';
+            ctx.fillText('P', p.x + 5, p.y + 15);
+            ctx.fillStyle = '#00ff00';
+        });
+
+        // Bullets
+        ctx.fillStyle = player.powerUpTime > Date.now() ? '#00ffff' : '#ffff00';
+        bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+        // Particles
+        particles.forEach(p => {
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x, p.y, 2, 2);
+        });
+
+        // Enemies
+        enemies.forEach(e => {
+            ctx.fillStyle = e.color;
+            if (e.isHeavy) {
+                ctx.fillRect(e.x, e.y, e.w, e.h); // Musuh besar nampak petak
+            } else {
+                ctx.beginPath();
+                ctx.moveTo(e.x, e.y + e.h);
+                ctx.lineTo(e.x + e.w/2, e.y);
+                ctx.lineTo(e.x + e.w, e.y + e.h);
+                ctx.fill();
+            }
+        });
+
+        // Player Plane
+        ctx.fillStyle = player.color;
+        ctx.fillRect(player.x + player.w * 0.4, player.y, player.w * 0.2, player.h); // Body
+        ctx.fillRect(player.x, player.y + player.h * 0.4, player.w, player.h * 0.2); // Wings
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(player.x + player.w * 0.45, player.y + 5, player.w * 0.1, 5); // Cockpit
+    }
+
+    function endGame() {
+        gameActive = false;
+        document.getElementById('final-score').textContent = score;
+        document.getElementById('game-over').classList.remove('hidden');
+    }
+
+    function gameLoop() {
+        if (!gameActive || isPaused) return;
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+</script>
+</body>
+</html>
